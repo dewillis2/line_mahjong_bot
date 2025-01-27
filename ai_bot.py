@@ -228,7 +228,7 @@ def generate_fortune():
 # 　返信メッセージを生成する関数
 def generate_response(from_user, text):
     res = []
-    if text in ["今日のラーキ牌", "麻雀占い", "占い"]:
+    if text in ["今日のラッキー牌", "麻雀占い", "占い"]:
         # 生成幸运牌
         tile, image_url = generate_fortune()
         res.append(TextMessage(text=f"{from_user}さん、今日のラッキー牌は…「{tile}」です！"))
