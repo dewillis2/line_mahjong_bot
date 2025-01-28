@@ -3,18 +3,7 @@ import sys
 from datetime import datetime
 import random
 from email import message_from_string
-
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.devtools.v85.dom import set_attributes_as_text
-from webdriver_manager.chrome import ChromeDriverManager
-from bs4 import BeautifulSoup
-import time
-import requests
-from bs4 import BeautifulSoup
-
 import re
-
 #計算
 from mahjong.hand_calculating.hand import HandCalculator
 #麻雀牌

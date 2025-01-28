@@ -43,7 +43,4 @@ wrapt==1.17.0
 yarl==1.18.3 
 
 mahjong~=1.2.1
-selenium~=4.28.1
-webdriver-manager~=4.0.2
-bs4~=0.0.2
 beautifulsoup4~=4.12.3
