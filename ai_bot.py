@@ -2,13 +2,29 @@ import os
 import sys
 from datetime import datetime
 import random
+from email import message_from_string
+
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.devtools.v85.dom import set_attributes_as_text
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import time
 import requests
 from bs4 import BeautifulSoup
+
+import re
+
+#計算
+from mahjong.hand_calculating.hand import HandCalculator
+#麻雀牌
+from mahjong.tile import TilesConverter
+#役, オプションルール
+from mahjong.hand_calculating.hand_config import HandConfig, OptionalRules
+#鳴き
+from mahjong.meld import Meld
+#風(場&自)
+from mahjong.constants import EAST, SOUTH, WEST, NORTH
 from flask import Flask, request, abort
 
 from linebot.v3 import WebhookHandler
@@ -59,60 +75,262 @@ mahjong_tiles = {
     "9p": "https://i.imgur.com/2s1J9SL.png",
 }
 
+calculator = HandCalculator()  # 创建 HandCalculator 实例
 
-def get_tenhou_analysis_selenium(hand_str):
-    """ 用 Selenium 解析天凤牌理分析 """
-    print(f"【调试】启动 Selenium，解析手牌: {hand_str}")
+config_mapping = {
+    1: "is_riichi",
+    2: "player_wind",
+    3: "player_wind",
+    4: "player_wind",
+    5: "player_wind",
+    6: "round_wind",
+    7: "round_wind",
+    8: "round_wind",
+    9: "round_wind",
+    10: "is_ippatsu",
+    11: "is_rinshan",
+    12: "is_chankan",
+    13: "is_haitei",
+    14: "is_houtei",
+    15: "is_daburu_riichi",
+    16: "is_nagashi_mangan",
+    17: "is_tenhou",
+    18: "is_renhou",
+    19: "is_chiihou"
+}
 
-    url = f"https://tenhou.net/2/?q={hand_str}"
+# **用户选择的值**
+value_mapping = {
+    2: "EAST", 3: "SOUTH", 4: "WEST", 5: "NORTH",
+    6: "EAST", 7: "SOUTH", 8: "WEST", 9: "NORTH"
+}
 
-    # 设置 Chrome 浏览器选项
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")  # 无界面模式
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+def print_hand_result(hand_result):
+    # 翻数, 符数
+    print(hand_result.han, hand_result.fu)
+    # 点数(ツモアガリの場合[左：親失点, 右:子失点], ロンアガリの場合[左:放銃者失点, 右:0])
+    print(hand_result.cost['main'], hand_result.cost['additional'])
+    # 役
+    print(hand_result.yaku)
+    # 符数の詳細
+    for fu_item in hand_result.fu_details:
+        print(fu_item)
+    print('')
 
-    try:
-        # 启动 Chrome 浏览器
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        print("【调试】Chrome WebDriver 启动成功")
+def extract_first_part(message):
+    """
+    从输入消息中提取第一个逗号（，）之前的信息
+    """
+    parts = message.split(",")  # 按照第一个逗号分割
+    return parts[0].strip()
 
-        # 打开网页
-        driver.get(url)
-        print(f"【调试】打开网页: {url}")
+def extract_2_commas(message):
+    """
+    提取第一个逗号和第二个逗号之间的内容
+    """
+    parts = message.split(",")  # 按中文逗号分割
+    return parts[1].strip()  # 提取第2个部分（索引 1）
 
-        # 等待 JavaScript 加载
-        time.sleep(3)
+def extract_3_commas(message):
+    """
+    提取第二个和第三个逗号之间的内容
+    """
+    parts = message.split(",")  # 按英文逗号分割
+    return parts[2].strip() if len(parts) > 3 else ""  # 提取索引 2（第三个部分）
 
-        # 获取完整 HTML
-        html_content = driver.page_source
-        print(f"【调试】网页 HTML 内容: {html_content[:500]}")  # 只打印前 500 个字符，避免输出太多
+def extract_4_commas(message):
+    """
+    提取第三个和第四个逗号之间的内容
+    """
+    parts = message.split(",")  # 按英文逗号分割
+    return parts[3].strip() if len(parts) > 4 else ""  # 提取索引 3（第 4 段）
 
-        driver.quit()  # 关闭浏览器
-        print("【调试】Chrome WebDriver 关闭成功")
+def extract_5_commas(message):
+    """
+    提取第四个逗号之后的内容
+    """
+    parts = message.split(",")  # 按英文逗号分割
+    print(parts[4].strip())
+    return parts[4].strip()
 
-        # 解析 HTML
-        soup = BeautifulSoup(html_content, "html.parser")
+def extract_symbols_with_types(message):
+    """
+    提取所有 () [] {} :: 之间的内容，并标明符号类型
+    """
+    # 匹配所有符号及其内容
+    pattern = r'\((.*?)\)|\[(.*?)\]|\{(.*?)\}|::(.*?)::'
+    matches = re.finditer(pattern, message)
 
-        # 查找 <pre> 标签（现在应该已经加载出来了）
-        pre_tags = soup.find_all("pre")
-        if pre_tags:
-            print("【调试】成功找到 <pre> 标签")
-            return pre_tags[-1].text.strip()
+    extracted_data = []
 
-        # 如果没有 <pre>，尝试直接抓取文本
-        text_content = soup.get_text()
-        lines = [line.strip() for line in text_content.split("\n") if "打" in line]
-        if lines:
-            print("【调试】成功找到推荐切牌信息")
-            return "\n".join(lines)
+    for match in matches:
+        if match.group(1):  # ()
+            extracted_data.append(("()", match.group(1)))
+        elif match.group(2):  # []
+            extracted_data.append(("[]", match.group(2)))
+        elif match.group(3):  # {}
+            extracted_data.append(("{}", match.group(3)))
+        elif match.group(4):  # ::
+            extracted_data.append(("::", match.group(4)))
 
-        return "解析失败，未找到分析结果。"
+    return extracted_data
 
-    except Exception as e:
-        print(f"【错误】Selenium 执行失败: {e}")
-        return f"【错误】Selenium 执行失败: {e}"
+def extract_tiles(message):
+    """
+    提取麻将牌的数字和花色 (m, p, s) 并存入列表
+    """
+    matches = re.findall(r'(\d+)([mps])', message)  # 匹配 "数字 + 字母"
 
+    tile_list = []
+    for num, suit in matches:
+        tile_list.append({"num": num, "suit": suit})  # 记录每张牌的信息
+
+    return tile_list
+
+def get_tiles(text):
+    t = extract_first_part(text)
+    man = get_man(t)
+    pin = get_pin(t)
+    sou = get_sou(t)
+    honors = get_honors(t)
+    tiles = TilesConverter.string_to_136_array(man=man, pin=pin, sou=sou, honors=honors)
+    return tiles
+
+def get_man(text):
+    man = ''.join(re.findall(r'(\d+)m', text))  # 提取所有万子
+    return man
+
+def get_pin(text):
+    pin = ''.join(re.findall(r'(\d+)p', text))
+    return pin
+
+def get_sou(text):
+    sou = ''.join(re.findall(r'(\d+)s', text))
+    return sou
+
+def get_honors(text):
+    honors = ''.join(re.findall(r'(\d+)z', text))
+    return honors
+
+def get_win(text):
+    t = extract_2_commas(text)
+    if t.endswith("m"):
+        win_tile = TilesConverter.string_to_136_array(man=t[0])[0]
+    elif t.endswith("p"):
+        win_tile = TilesConverter.string_to_136_array(pin=t[0])[0]
+    elif t.endswith("s"):
+        win_tile = TilesConverter.string_to_136_array(sou=t[0])[0]
+    elif t.endswith("z"):
+        win_tile = TilesConverter.string_to_136_array(honors=t[0])[0]
+    return win_tile
+
+def get_melds(text):
+    t = extract_3_commas(text)
+    if t.strip() == "":  # 用户输入空格，表示没有鸣牌
+        return None
+    e = extract_symbols_with_types(t)
+    melds=[]
+    for symbol, content in e:
+        if symbol == "()":
+            if content.endswith("m"):
+                m = Meld(Meld.CHI, TilesConverter.string_to_136_array(man=content[:-1]))
+            if content.endswith("p"):
+                m = Meld(Meld.CHI, TilesConverter.string_to_136_array(pin=content[:-1]))
+            if content.endswith("s"):
+                m = Meld(Meld.CHI, TilesConverter.string_to_136_array(sou=content[:-1]))
+            if content.endswith("z"):
+                m = Meld(Meld.CHI, TilesConverter.string_to_136_array(honors=content[:-1]))
+        elif symbol == "[]":
+            if content.endswith("m"):
+                m = Meld(Meld.PON, TilesConverter.string_to_136_array(man=content[:-1]))
+            if content.endswith("p"):
+                m = Meld(Meld.PON, TilesConverter.string_to_136_array(pin=content[:-1]))
+            if content.endswith("s"):
+                m = Meld(Meld.PON, TilesConverter.string_to_136_array(sou=content[:-1]))
+            if content.endswith("z"):
+                m = Meld(Meld.PON, TilesConverter.string_to_136_array(honors=content[:-1]))
+        elif symbol == "{}":
+            if content.endswith("m"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(man=content[:-1]),False)
+            if content.endswith("p"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(pin=content[:-1]),False)
+            if content.endswith("s"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(sou=content[:-1]),False)
+            if content.endswith("z"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(honors=content[:-1]),False)
+        elif symbol == "::":
+            if content.endswith("m"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(man=content[:-1]))
+            if content.endswith("p"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(pin=content[:-1]))
+            if content.endswith("s"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(sou=content[:-1]))
+            if content.endswith("z"):
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(honors=content[:-1]))
+        melds.append(m)
+    return melds
+
+def get_dora(text):
+    t = extract_4_commas(text)
+    if t.strip() == "":  # 用户输入空格，表示没有宝牌
+        return None
+    e = extract_tiles(t)
+    d_i = []
+    for num,suit in e:
+        if suit == 'm':
+            di = TilesConverter.string_to_136_array(man=num)[0]
+        elif suit == 'p':
+            di = TilesConverter.string_to_136_array(pin=num)[0]
+        elif suit == 's':
+            di = TilesConverter.string_to_136_array(sou=num)[0]
+        elif suit == 'z':
+            di = TilesConverter.string_to_136_array(honors=num)[0]
+        d_i.append(di)
+    return d_i
+
+def get_config(text):
+    t = extract_5_commas(text)
+    print(f"hhshsh",t)
+    if t.strip() == "":  # 如果用户输入为空，则返回默认 HandConfig
+        return HandConfig()
+
+    user_choices = set(map(int, t.split()))  # 解析用户输入
+    config_params = {}
+
+    # 遍历用户选择的数字，填充 HandConfig 参数
+    for key in user_choices:
+        if key in config_mapping:
+            param_name = config_mapping[key]
+            config_params[param_name] = value_mapping.get(key, True)  # 如果是风，填风位，否则填 True
+
+    print(f"DEBUG: 生成的参数字典 = {config_params}")  # 确保数据正确
+    config = HandConfig(**config_params)  # 创建 HandConfig
+    print(f"DEBUG: config.__dict__ = {config.__dict__}")  # 确认 HandConfig 内部数据
+
+    return config
+
+def format_hand_result(hand_result):
+    """
+    格式化手牌计算结果，适用于 LINE 消息
+    """
+    # 翻数 & 符数
+    result_text = f"【点数计算结果】\n翻数: {hand_result.han} 翻\n符数: {hand_result.fu} 符\n\n"
+
+    # 点数信息（自摸 & 放铳）
+    main_cost = hand_result.cost['main']
+    additional_cost = hand_result.cost['additional']
+    result_text += f"【点数】\n自摸: {main_cost}（子:{additional_cost}）\n放铳: {main_cost}\n\n"
+
+    # 役种
+    result_text += "【役】\n"
+    result_text += ", ".join(hand_result.yaku) + "\n\n"
+
+    # 符的详细信息
+    result_text += "【符详细】\n"
+    for fu_item in hand_result.fu_details:
+        result_text += f"- {fu_item}\n"
+
+    return result_text.strip()  # 去掉多余空行
 
 
 # get LINE credentials from environment variables
@@ -233,10 +451,36 @@ def generate_response(from_user, text):
         tile, image_url = generate_fortune()
         res.append(TextMessage(text=f"{from_user}さん、今日のラッキー牌は…「{tile}」です！"))
         res.append(ImageMessage(original_content_url=image_url, preview_image_url=image_url))
-    elif text.startswith("牌理 "):
-        hand_str = text.split("牌理 ")[-1].strip()
-        analysis_result = get_tenhou_analysis_selenium(hand_str)
-        res.append(TextMessage(text=f" 天凤分析结果：\n{analysis_result}"))
+    elif text.startswith("点数計算 "):  # 确保用户输入是 点数計算 + 牌
+        hand_input = text[len("点数計算 "):].strip()  # 提取 "点数計算 " 之后的部分
+        t = get_tiles(hand_input)
+        w = get_win(hand_input)
+        m = get_melds(hand_input)
+        d = get_dora(hand_input)
+        c = get_config(hand_input)
+        print("DEBUG: tiles =", t)
+        print("DEBUG: win_tile =", w)
+        print("DEBUG: melds =", m)
+        print("DEBUG: dora =", d)
+        print("DEBUG: config =", c)
+
+        result = calculator.estimate_hand_value(t, w, m, d, c)
+        res.append(TextMessage(text=f"【点数計算結果】\n翻数: {result.han} 翻\n符数: {result.fu} 符"))
+
+        main_cost = result.cost['main']
+        additional_cost = result.cost['additional']
+        res.append(TextMessage(text=f"【点数】\nツモ: {main_cost}（子: {additional_cost}）\nロン: {main_cost}"))
+
+
+        if result.yaku:
+            yaku_text = "【役】\n" + ", ".join(str(yaku) for yaku in result.yaku)
+            res.append(TextMessage(text=yaku_text))
+        else:
+            res.append(TextMessage(text="【役】\n役なし"))
+
+        if result.fu_details:
+            fu_text = "【符詳細】\n" + "\n".join(f"- {fu}" for fu in result.fu_details)
+            res.append(TextMessage(text=fu_text))
     else:
         # AIを使って返信を生成
         res = [TextMessage(text=get_ai_response(from_user, text))]
