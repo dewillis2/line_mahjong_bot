@@ -4,6 +4,8 @@ from datetime import datetime
 import random
 from email import message_from_string
 import re
+from pickle import FALSE
+
 #計算
 from mahjong.hand_calculating.hand import HandCalculator
 #麻雀牌
@@ -147,7 +149,7 @@ def extract_symbols_with_types(message):
     提取所有 () [] {} :: 之间的内容，并标明符号类型
     """
     # 匹配所有符号及其内容
-    pattern = r'\((.*?)\)|\[(.*?)\]|\{(.*?)\}|::(.*?)::'
+    pattern = r'\((.*?)\)|\[(.*?)\]|\{(.*?)\}|:(.*?):'
     matches = re.finditer(pattern, message)
 
     extracted_data = []
@@ -240,13 +242,13 @@ def get_melds(text):
                 m = Meld(Meld.PON, TilesConverter.string_to_136_array(honors=content[:-1]))
         elif symbol == "{}":
             if content.endswith("m"):
-                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(man=content[:-1]),False)
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(man=content[:-1]), False)
             if content.endswith("p"):
-                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(pin=content[:-1]),False)
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(pin=content[:-1]), False)
             if content.endswith("s"):
-                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(sou=content[:-1]),False)
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(sou=content[:-1]), False)
             if content.endswith("z"):
-                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(honors=content[:-1]),False)
+                m = Meld(Meld.KAN, TilesConverter.string_to_136_array(honors=content[:-1]), False)
         elif symbol == "::":
             if content.endswith("m"):
                 m = Meld(Meld.KAN, TilesConverter.string_to_136_array(man=content[:-1]))
@@ -259,27 +261,42 @@ def get_melds(text):
         melds.append(m)
     return melds
 
+
 def get_dora(text):
     t = extract_4_commas(text)
+    print(f"DEBUG: 提取的 dora 数据 = '{t}'")  # 调试信息
+
     if t.strip() == "":  # 用户输入空格，表示没有宝牌
+        print("DEBUG: dora 输入为空，返回 None")
         return None
+
     e = extract_tiles(t)
+    print(f"DEBUG: 提取的 tile 数据 = {e}")  # 确保格式正确
+
     d_i = []
-    for num,suit in e:
-        if suit == 'm':
-            di = TilesConverter.string_to_136_array(man=num)[0]
-        elif suit == 'p':
-            di = TilesConverter.string_to_136_array(pin=num)[0]
-        elif suit == 's':
-            di = TilesConverter.string_to_136_array(sou=num)[0]
-        elif suit == 'z':
-            di = TilesConverter.string_to_136_array(honors=num)[0]
-        d_i.append(di)
+    for tile in e:
+        num = tile["num"]
+        if tile["suit"] == 'm':
+            suit = "man"
+        if tile["suit"] == 'p':
+            suit = "pin"
+        if tile["suit"] == 's':
+            suit = "sou"
+        if tile["suit"] == 'z':
+            suit = "honor"
+        tile_str = f"{num}{suit}"  # 组合完整的牌字符串，比如 '7p', '9s'
+
+        # **转换为 136 编码**
+        converted_tile = TilesConverter.string_to_136_array(**{suit: num})[0]
+        d_i.append(converted_tile)
+        print(f"DEBUG: 当前解析出的 dora = {converted_tile}")
+
+    print(f"DEBUG: 最终 dora 指示牌 = {d_i}")
     return d_i
+
 
 def get_config(text):
     t = extract_5_commas(text)
-    print(f"hhshsh",t)
     if t.strip() == "":  # 如果用户输入为空，则返回默认 HandConfig
         return HandConfig()
 
